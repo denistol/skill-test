@@ -14,6 +14,9 @@
 4. **The "Delete" operation required deletion logic, but the current database has no physical delete function for students.**  
    The schema and service already supported soft-disable via `is_active` (through the existing `setStudentStatus` method). Physical deletion would be risky due to foreign key relationships (e.g. `user_profiles`).
 
+5. **No request validation on student endpoints.**  
+   Unlike auth (which validates login via Zod), student routes accepted raw `req.body`, `req.query`, and `req.params` without checking required fields, types, or id format.
+
 ## Design Decisions
 
 ### 1) Controller layer: wiring services to HTTP responses
@@ -66,6 +69,32 @@ For status change operations (`POST /students/:id/status` and `DELETE /students/
 - `reviewerId = req.user.id` (current user from the JWT context);
 - `status: Boolean(req.body.status)` (coerce to boolean even if the client sends a string or number).
 
+### 7) Zod request validation on the router
+
+Following the same pattern as `auth-router.js`, validation was added via the existing `validateRequest` middleware — not inside controller handlers. This keeps controllers thin and returns consistent `400` responses before the service layer is reached.
+
+New file: `backend/src/modules/students/students-schema.js`
+
+| Schema | Route | What it validates |
+|--------|-------|-------------------|
+| `GetAllStudentsSchema` | `GET /students` | optional query filters (`name`, `class`, `className`, `section`, `roll`) |
+| `AddStudentSchema` | `POST /students` | required student body fields (name, email, class, addresses, guardian info, etc.) |
+| `GetStudentDetailSchema` | `GET /students/:id` | numeric `id` param |
+| `UpdateStudentSchema` | `PUT /students/:id` | numeric `id` param + full body including `systemAccess` |
+| `StudentStatusSchema` | `POST /students/:id/status` | numeric `id` param + boolean `status` |
+| `DeleteStudentSchema` | `DELETE /students/:id` | numeric `id` param |
+
+Validation error response format (via `validate-request.js`):
+
+```json
+{
+  "error": "Validation error",
+  "detail": [{ "path": "body.email", "message": "Invalid email address" }]
+}
+```
+
+Business/domain errors (404, 500, etc.) remain in the service layer via `ApiError` and are handled by the global error middleware.
+
 ## What Was Implemented
 
 Changes for Problem 2:
@@ -80,8 +109,13 @@ Changes for Problem 2:
 2. **Delete endpoint added in** `backend/src/modules/students/sudents-router.js`:
    - `DELETE /api/v1/students/:id` — `handleDeleteStudent` (soft-disable via `setStudentStatus`)
 
+3. **Zod validation schemas added in** `backend/src/modules/students/students-schema.js` and wired on every student route in `sudents-router.js` via `validateRequest`.
+
+4. **Role name constant extracted to** `backend/src/constants/role-names.js` (`ROLE_NAMES.STUDENT`).
+
 ## How This Meets the `Readme.md` Expectations
 
 - Full student CRUD now has HTTP handlers and correct responses.
+- Input validation is enforced at the router layer with Zod before requests reach the service.
 - Errors and failure cases are handled in services via `ApiError`, and controllers invoke them through `express-async-handler`.
 - The API contract (JSON format and fields required by the frontend) is aligned at the controller layer.
